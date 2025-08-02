@@ -1,0 +1,43 @@
+# --- General Ignored Files ---
+# Ignore all object files, executables, and other build artifacts
+*.o
+*.elf
+*.hex
+*.bin
+*.map
+*.lst
+
+# Ignore temporary files
+*.tmp
+*.bak
+*.suo
+*.user
+
+# --- Mac OS Specific ---
+# Ignore Mac OS X generated files
+.DS_Store
+# Ignore user-specific Finder metadata
+.metadata
+# Ignore thumbnail cache files (Windows equivalent, good practice)
+Thumbs.db
+
+# --- STM32CubeIDE Specific ---
+# Ignore Eclipse project files that contain user-specific paths and settings
+.project
+.cproject
+.settings/
+.mxproject
+# Ignore the build output directory (e.g., Debug/ or Release/)
+Debug/
+Release/
+
+# --- IDE/Editor Specific ---
+# Ignore Visual Studio Code configuration folders
+.vscode/
+# Ignore JetBrains IDE configuration folders (e.g., CLion)
+.idea/
+
+# --- Other Folders to Ignore ---
+# Ignore any other build-related directories
+.dep/
+build/
