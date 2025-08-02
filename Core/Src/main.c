@@ -21,7 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-
+#include <stdlib.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -51,6 +51,35 @@ TIM_HandleTypeDef htim2;
 UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
+GPIO_TypeDef* IR_LED_PORTS[9] = { GPIOB, GPIOB, GPIOB, GPIOB, GPIOA, GPIOA, GPIOB, GPIOB, GPIOB};
+uint32_t IR_LED_PINS[9] = {GPIO_PIN_12, GPIO_PIN_13, GPIO_PIN_14, GPIO_PIN_15, GPIO_PIN_12, GPIO_PIN_15, GPIO_PIN_3, GPIO_PIN_4, GPIO_PIN_5};
+uint32_t sensorAdcChannel[9] = {
+    ADC_CHANNEL_8, // sensor 0 → PB12
+    ADC_CHANNEL_7, // sensor 1 → PB13
+    ADC_CHANNEL_6, // sensor 2 → PB14
+    ADC_CHANNEL_5, // sensor 3 → PB15
+    ADC_CHANNEL_4, // sensor 4 → PA12
+    ADC_CHANNEL_3, // sensor 5 → PA15
+    ADC_CHANNEL_2, // sensor 6 → PB3
+    ADC_CHANNEL_1, // sensor 7 → PA4
+    ADC_CHANNEL_0, // sensor 8 → PB5
+};
+
+// These variables will store your sensor data. You can change `float` to `float32_t` if you wish.
+float ambient_adc[9][1000];
+float ir_on_adc[9][1000];
+float signal_calib[9][1000];
+float signal_runtime[9];
+float localMin=0;
+float localMax=0;
+volatile float liveAmbient[9];
+volatile float liveIrOn[9];
+volatile float SignalAvg[9];
+volatile float sumSignal=0;
+volatile float calib[9][2];
+volatile uint8_t adcDone = 0;
+volatile uint32_t adc_buf;
+float min_max[9][2];
 
 /* USER CODE END PV */
 
@@ -64,11 +93,192 @@ static void MX_TIM2_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_USART1_UART_Init(void);
 /* USER CODE BEGIN PFP */
-
+void setMotorSpeed(uint8_t motor, int32_t speed);
+void delay_us(uint32_t us);
+void calibrate(void);
+void ReadSensors(void);
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+void setMotorSpeed(uint8_t motor, int32_t speed)
+{
+	// tim1 ch1- left front, ch2- left back, ch3-right front, ch4- right back
+    uint16_t pwm = abs(speed);
+    if (pwm > 200) pwm = 200;  // Limit max speed
+
+    if (motor == 0) {  // Left motor
+        if (speed > 0) {
+            TIM1->CCR1 = pwm;
+            TIM1->CCR2 = 0;
+        } else {
+            TIM1->CCR1 = 0;
+            TIM1->CCR2 = pwm;
+        }
+    }
+    else if (motor == 1) {  // Right motor
+        if (speed > 0) {
+            TIM1->CCR3 = pwm;
+            TIM1->CCR4 = 0;
+        } else {
+            TIM1->CCR3 = 0;
+            TIM1->CCR4 = pwm;
+        }
+    }
+}
+void delay_us(uint32_t us)
+{
+    uint32_t start = __HAL_TIM_GET_COUNTER(&htim2);
+    while ((__HAL_TIM_GET_COUNTER(&htim2) - start) < us);
+}
+void calibrate(void)
+{ 	volatile int sensorIndex = 0;
+    volatile int sampleIndex=0;
+    localMin= signal_calib[sensorIndex][0];
+    localMax =signal_calib[sensorIndex][0];;
+
+
+    ADC_ChannelConfTypeDef sConfig; // sconfig to change channels
+
+    for(sensorIndex =0; sensorIndex<9 ; sensorIndex++)
+    {
+    	sConfig.Channel = sensorAdcChannel[sensorIndex]; // to update channels
+    	sConfig.Rank = 1; //ADC_REGULAR_RANK_1;
+    	HAL_ADC_ConfigChannel(&hadc1, &sConfig);
+
+    	for(sampleIndex=0; sampleIndex <1000; sampleIndex++)
+    	{
+    		// ir led off
+    		HAL_GPIO_WritePin(IR_LED_PORTS[sensorIndex], IR_LED_PINS[sensorIndex], RESET);
+    		delay_us(50);
+    		HAL_ADC_Start(&hadc1);
+    		HAL_ADC_PollForConversion(&hadc1, 0xFFFFFFFFU);
+            // 0xFFFFFFFFU is delay so it stays in loop unless adc conversion finished
+    		ambient_adc[sensorIndex][sampleIndex]=HAL_ADC_GetValue(&hadc1);
+
+    		if (__HAL_ADC_GET_FLAG(&hadc1, ADC_FLAG_OVR)) {
+    		    // Overflow happened
+    		    __HAL_ADC_CLEAR_FLAG(&hadc1, ADC_FLAG_OVR);  // clear it
+    		}
+
+     		liveAmbient[sensorIndex] = ambient_adc[sensorIndex][sampleIndex];  //live view
+     		//HAL_Delay(1000);
+
+            //ir led on
+    		HAL_GPIO_WritePin(IR_LED_PORTS[sensorIndex], IR_LED_PINS[sensorIndex], SET);
+    		delay_us(50);
+    		HAL_ADC_Start(&hadc1);
+            HAL_ADC_PollForConversion(&hadc1, 0xFFFFFFFFU);
+    	   ir_on_adc[sensorIndex][sampleIndex]=HAL_ADC_GetValue(&hadc1);
+
+    	   if (__HAL_ADC_GET_FLAG(&hadc1, ADC_FLAG_OVR)) {
+    	       // Overflow happened
+    	       __HAL_ADC_CLEAR_FLAG(&hadc1, ADC_FLAG_OVR);  // clear it
+    	   }
+
+
+    	   // save difference in array
+    	   signal_calib[sensorIndex][sampleIndex]= (int32_t) ambient_adc[sensorIndex][sampleIndex]-(int32_t)ir_on_adc[sensorIndex][sampleIndex];
+
+    	   sumSignal += signal_calib[sensorIndex][sampleIndex];
+    	}
+    	SignalAvg[sensorIndex] = (float)sumSignal / 1000.0f;
+    	sumSignal=0;
+
+    	for (int i = 1; i < 1000; i++)
+    	{
+    	   float val = signal_calib[sensorIndex][i];
+    	    if (val < localMin) localMin = val;
+    	    if (val > localMax) localMax = val;
+    	}
+    	min_max[sensorIndex][0]= localMin;
+    	min_max[sensorIndex][1] = localMax;
+
+
+    	HAL_Delay(1);
+
+
+	}
+
+ // print on oled - calibration done
+
+
+}
+void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
+{
+	if(hadc -> Instance == ADC1){
+		 adcDone = 1;
+	}
+
+} //callback during runtime
+void ReadSensors(void)
+{
+	   int sensorIndex = 0;
+
+
+	   ADC_ChannelConfTypeDef sConfig; // sconfig to change channels
+
+	   for(sensorIndex =0; sensorIndex<9 ; sensorIndex++)
+	   {
+	   	sConfig.Channel = sensorAdcChannel[sensorIndex]; // to update channels
+	   	sConfig.Rank = 1; //ADC_REGULAR_RANK_1;
+	   	HAL_ADC_ConfigChannel(&hadc1, &sConfig);
+
+			// ir led off
+			HAL_GPIO_WritePin(IR_LED_PORTS[sensorIndex], IR_LED_PINS[sensorIndex], RESET);
+			delay_us(50);
+			  HAL_ADC_Stop_DMA(&hadc1);  // <<< IMPORTANT
+			adcDone = 0;
+
+			HAL_ADC_Start_DMA(&hadc1, (uint32_t *)&adc_buf, 1);
+
+
+			 // wait until conversion is complete
+			while (adcDone == 0);
+
+			ambient_adc[sensorIndex][0]=adc_buf;
+			liveAmbient[sensorIndex] = adc_buf;  //live view
+
+			if (__HAL_ADC_GET_FLAG(&hadc1, ADC_FLAG_OVR))
+			{
+			    // Overflow happened
+			     __HAL_ADC_CLEAR_FLAG(&hadc1, ADC_FLAG_OVR);  // clear it
+			}
+
+
+
+	 		//ir led on
+	 		HAL_GPIO_WritePin(IR_LED_PORTS[sensorIndex], IR_LED_PINS[sensorIndex], SET);
+	 		delay_us(50);
+	 		 HAL_ADC_Stop_DMA(&hadc1);  // <<< IMPORTANT
+	 		adcDone = 0;
+
+	 	   HAL_ADC_Start_DMA(&hadc1, (uint32_t *)&adc_buf, 1);
+
+	 	   //callback will be triggered after conversion
+	 	   // wait until conversion is complete
+	 	   while (adcDone == 0);
+
+	 	  ir_on_adc[sensorIndex][0]=adc_buf;
+	 	  liveIrOn[sensorIndex] = adc_buf;     //live view
+
+		   if (__HAL_ADC_GET_FLAG(&hadc1, ADC_FLAG_OVR)) {
+		       // Overflow happened
+		       __HAL_ADC_CLEAR_FLAG(&hadc1, ADC_FLAG_OVR);  // clear it
+		   }
+
+
+
+
+	 	   // save difference in array
+		   signal_runtime[sensorIndex]= ambient_adc[sensorIndex][0]- ir_on_adc[sensorIndex][0];
+
+	}
+
+	//  // print on oled - sensor data took
+
+}
 
 /* USER CODE END 0 */
 
@@ -108,13 +318,23 @@ int main(void)
   MX_I2C1_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
+  HAL_TIM_Base_Start(&htim2);
 
+  // Start PWM for motors
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);
+
+  // Call calibrate once at the beginning of your program to establish a baseline
+  calibrate();
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+	  ReadSensors();
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
