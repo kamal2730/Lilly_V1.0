@@ -67,20 +67,20 @@ uint32_t sensorAdcChannel[9] = {
 };
 
 // These variables will store your sensor data. You can change `float` to `float32_t` if you wish.
-float ambient_adc[9][1000];
-float ir_on_adc[9][1000];
-float signal_calib[9][1000];
-float signal_runtime[9];
-float localMin=0;
-float localMax=0;
-volatile float liveAmbient[9];
-volatile float liveIrOn[9];
-volatile float SignalAvg[9];
-volatile float sumSignal=0;
-volatile float calib[9][2];
+float32_t ambient_adc[9][1000];
+float32_t ir_on_adc[9][1000];
+float32_t signal_calib[9][1000];
+float32_t signal_runtime[9];
+float32_t localMin=0;
+float32_t localMax=0;
+volatile float32_t liveAmbient[9];
+volatile float32_t liveIrOn[9];
+volatile float32_t SignalAvg[9];
+volatile float32_t sumSignal=0;
+volatile float32_t calib[9][2];
 volatile uint8_t adcDone = 0;
 volatile uint32_t adc_buf;
-float min_max[9][2];
+float32_t min_max[9][2];
 
 /* USER CODE END PV */
 
@@ -156,7 +156,7 @@ void calibrate(void)
     		HAL_ADC_Start(&hadc1);
     		HAL_ADC_PollForConversion(&hadc1, 0xFFFFFFFFU);
             // 0xFFFFFFFFU is delay so it stays in loop unless adc conversion finished
-    		ambient_adc[sensorIndex][sampleIndex]=HAL_ADC_GetValue(&hadc1);
+    		ambient_adc[sensorIndex][sampleIndex]=(float32_t)HAL_ADC_GetValue(&hadc1);
 
     		if (__HAL_ADC_GET_FLAG(&hadc1, ADC_FLAG_OVR)) {
     		    // Overflow happened
@@ -171,7 +171,7 @@ void calibrate(void)
     		delay_us(50);
     		HAL_ADC_Start(&hadc1);
             HAL_ADC_PollForConversion(&hadc1, 0xFFFFFFFFU);
-    	   ir_on_adc[sensorIndex][sampleIndex]=HAL_ADC_GetValue(&hadc1);
+    	   ir_on_adc[sensorIndex][sampleIndex]=(float32_t)HAL_ADC_GetValue(&hadc1);
 
     	   if (__HAL_ADC_GET_FLAG(&hadc1, ADC_FLAG_OVR)) {
     	       // Overflow happened
@@ -180,16 +180,15 @@ void calibrate(void)
 
 
     	   // save difference in array
-    	   signal_calib[sensorIndex][sampleIndex]= (int32_t) ambient_adc[sensorIndex][sampleIndex]-(int32_t)ir_on_adc[sensorIndex][sampleIndex];
-
+    	   signal_calib[sensorIndex][sampleIndex] = ambient_adc[sensorIndex][sampleIndex] - ir_on_adc[sensorIndex][sampleIndex];
     	   sumSignal += signal_calib[sensorIndex][sampleIndex];
     	}
-    	SignalAvg[sensorIndex] = (float)sumSignal / 1000.0f;
+    	SignalAvg[sensorIndex] = sumSignal / 1000.0f;
     	sumSignal=0;
 
     	for (int i = 1; i < 1000; i++)
     	{
-    	   float val = signal_calib[sensorIndex][i];
+    		float32_t val = signal_calib[sensorIndex][i];
     	    if (val < localMin) localMin = val;
     	    if (val > localMax) localMax = val;
     	}
@@ -238,8 +237,8 @@ void ReadSensors(void)
 			 // wait until conversion is complete
 			while (adcDone == 0);
 
-			ambient_adc[sensorIndex][0]=adc_buf;
-			liveAmbient[sensorIndex] = adc_buf;  //live view
+			ambient_adc[sensorIndex][0]=(float32_t)adc_buf;
+			liveAmbient[sensorIndex] = (float32_t)adc_buf;  //live view
 
 			if (__HAL_ADC_GET_FLAG(&hadc1, ADC_FLAG_OVR))
 			{
@@ -261,8 +260,8 @@ void ReadSensors(void)
 	 	   // wait until conversion is complete
 	 	   while (adcDone == 0);
 
-	 	  ir_on_adc[sensorIndex][0]=adc_buf;
-	 	  liveIrOn[sensorIndex] = adc_buf;     //live view
+	 	  ir_on_adc[sensorIndex][0]=(float32_t)adc_buf;
+	 	  liveIrOn[sensorIndex] = (float32_t)adc_buf;     //live view
 
 		   if (__HAL_ADC_GET_FLAG(&hadc1, ADC_FLAG_OVR)) {
 		       // Overflow happened
@@ -273,7 +272,7 @@ void ReadSensors(void)
 
 
 	 	   // save difference in array
-		   signal_runtime[sensorIndex]= ambient_adc[sensorIndex][0]- ir_on_adc[sensorIndex][0];
+		   signal_runtime[sensorIndex] = ambient_adc[sensorIndex][0] - ir_on_adc[sensorIndex][0];
 
 	}
 
