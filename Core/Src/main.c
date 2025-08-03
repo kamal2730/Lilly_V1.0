@@ -125,22 +125,22 @@ void setMotorSpeed(uint8_t motor, int32_t speed)
     uint16_t pwm = abs(speed);
     if (pwm > 200) pwm = 200;  // Limit max speed
 
-    if (motor == 0) {  // Left motor
-        if (speed > 0) {
-            TIM1->CCR1 = pwm;
-            TIM1->CCR2 = 0;
-        } else {
-            TIM1->CCR1 = 0;
-            TIM1->CCR2 = pwm;
-        }
-    }
-    else if (motor == 1) {  // Right motor
-        if (speed > 0) {
+    if (motor == 1) {  // Right motor
+        if (speed < 0) {
             TIM1->CCR3 = pwm;
             TIM1->CCR4 = 0;
         } else {
             TIM1->CCR3 = 0;
             TIM1->CCR4 = pwm;
+        }
+    }
+    else if (motor == 0) {  // Left motor
+        if (speed < 0) {
+            TIM1->CCR2 = pwm;
+            TIM1->CCR1 = 0;
+        } else {
+            TIM1->CCR2 = 0;
+            TIM1->CCR1 = pwm;
         }
     }
 }
@@ -344,6 +344,7 @@ int main(void)
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
   HAL_TIM_Base_Start(&htim2);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, GPIO_PIN_SET);
 
   // Start PWM for motors
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
@@ -363,34 +364,36 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	  uint32_t current_time = HAL_GetTick();
-	  if((current_time-last_update_time)>=INTERVAL_MS){
-		  last_update_time=HAL_GetTick();
-		  ReadSensors();
-		  position=line_data();
-		  if (position == 255)
-		  {
-			  arm_pid_reset_f32(&pid);
-			  if (last_known_turn_direction == 1) { // We were heading into a right turn
-				  setMotorSpeed(0, turn_speed);
-				  setMotorSpeed(1, -turn_speed);
-			  } else if (last_known_turn_direction == -1) { // We were heading into a left turn
-				  setMotorSpeed(0, -turn_speed);
-				  setMotorSpeed(1, turn_speed);
-			  }
-
-		  } else {
-			  if (position > 0) {
-				  last_known_turn_direction = 1; // Line is to the right
-			  } else if (position < 0) {
-				  last_known_turn_direction = -1; // Line is to the left
-			  }
-			  error = ((float32_t)position - (float32_t)setpoint);
-			  output = arm_pid_f32(&pid, error);
-			  setMotorSpeed(0, base_speed + (int32_t)output);
-			  setMotorSpeed(1, base_speed - (int32_t)output);
-		  }
-	  }
+//	  uint32_t current_time = HAL_GetTick();
+//	  if((current_time-last_update_time)>=INTERVAL_MS){
+//		  last_update_time=HAL_GetTick();
+//		  ReadSensors();
+//		  position=line_data();
+//		  if (position == 255)
+//		  {
+//			  arm_pid_reset_f32(&pid);
+//			  if (last_known_turn_direction == 1) { // We were heading into a right turn
+//				  setMotorSpeed(0, turn_speed);
+//				  setMotorSpeed(1, -turn_speed);
+//			  } else if (last_known_turn_direction == -1) { // We were heading into a left turn
+//				  setMotorSpeed(0, -turn_speed);
+//				  setMotorSpeed(1, turn_speed);
+//			  }
+//
+//		  } else {
+//			  if (position > 0) {
+//				  last_known_turn_direction = 1; // Line is to the right
+//			  } else if (position < 0) {
+//				  last_known_turn_direction = -1; // Line is to the left
+//			  }
+//			  error = ((float32_t)position - (float32_t)setpoint);
+//			  output = arm_pid_f32(&pid, error);
+//			  setMotorSpeed(0, base_speed + (int32_t)output);
+//			  setMotorSpeed(1, base_speed - (int32_t)output);
+//		  }
+//	  }
+	  setMotorSpeed(0, base_speed );
+	  setMotorSpeed(1, base_speed );
 
 
     /* USER CODE END WHILE */
@@ -560,6 +563,7 @@ static void MX_TIM1_Init(void)
 
   /* USER CODE END TIM1_Init 0 */
 
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
   TIM_OC_InitTypeDef sConfigOC = {0};
   TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
@@ -574,6 +578,15 @@ static void MX_TIM1_Init(void)
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
   if (HAL_TIM_PWM_Init(&htim1) != HAL_OK)
   {
     Error_Handler();
