@@ -73,14 +73,29 @@ float32_t signal_calib[9][1000];
 float32_t signal_runtime[9];
 float32_t localMin=0;
 float32_t localMax=0;
-volatile float32_t liveAmbient[9];
-volatile float32_t liveIrOn[9];
+
 volatile float32_t SignalAvg[9];
 volatile float32_t sumSignal=0;
 volatile float32_t calib[9][2];
 volatile uint8_t adcDone = 0;
 volatile uint32_t adc_buf;
 float32_t min_max[9][2];
+
+//PID
+float32_t Kp = 2.5f, Ki = 0.0f, Kd = 0.5f;
+float32_t weights[9]={-40,-30,-20,-10,0,10,20,30,40};
+uint32_t last_update_time = 0;
+const uint32_t INTERVAL_MS = 20;
+float32_t threshold =120;
+float32_t position;
+float32_t output;
+float32_t error;
+float32_t setpoint=0;
+float32_t last_known_turn_direction;
+uint8_t base_speed = 100;
+uint8_t turn_speed = 60;
+
+arm_pid_instance_f32 pid;
 
 /* USER CODE END PV */
 
@@ -99,6 +114,7 @@ void delay_us(uint32_t us);
 void calibrate(void);
 void ReadSensors(void);
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc);
+float32_t line_data(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -162,9 +178,6 @@ void calibrate(void)
     		    // Overflow happened
     		    __HAL_ADC_CLEAR_FLAG(&hadc1, ADC_FLAG_OVR);  // clear it
     		}
-
-     		liveAmbient[sensorIndex] = ambient_adc[sensorIndex][sampleIndex];  //live view
-     		//HAL_Delay(1000);
 
             //ir led on
     		HAL_GPIO_WritePin(IR_LED_PORTS[sensorIndex], IR_LED_PINS[sensorIndex], SET);
@@ -238,7 +251,6 @@ void ReadSensors(void)
 			while (adcDone == 0);
 
 			ambient_adc[sensorIndex][0]=(float32_t)adc_buf;
-			liveAmbient[sensorIndex] = (float32_t)adc_buf;  //live view
 
 			if (__HAL_ADC_GET_FLAG(&hadc1, ADC_FLAG_OVR))
 			{
@@ -261,15 +273,11 @@ void ReadSensors(void)
 	 	   while (adcDone == 0);
 
 	 	  ir_on_adc[sensorIndex][0]=(float32_t)adc_buf;
-	 	  liveIrOn[sensorIndex] = (float32_t)adc_buf;     //live view
 
 		   if (__HAL_ADC_GET_FLAG(&hadc1, ADC_FLAG_OVR)) {
 		       // Overflow happened
 		       __HAL_ADC_CLEAR_FLAG(&hadc1, ADC_FLAG_OVR);  // clear it
 		   }
-
-
-
 
 	 	   // save difference in array
 		   signal_runtime[sensorIndex] = ambient_adc[sensorIndex][0] - ir_on_adc[sensorIndex][0];
@@ -279,7 +287,24 @@ void ReadSensors(void)
 	//  // print on oled - sensor data took
 
 }
+float32_t line_data(void){
+	float32_t sum = 0;
+	float32_t weighted_sum = 0;
+	float32_t onLine = 0;
+	for(int i=0;i<9;i++){
+		if(signal_runtime[i]<threshold){
+			weighted_sum += weights[i];
+			sum += 1;
+            onLine = 1;
+		}
+	}
+	 if (!onLine) {
+		 return 255;  // Line lost condition
+	 }
 
+	 return (float32_t)weighted_sum / (float32_t)sum;
+
+}
 /* USER CODE END 0 */
 
 /**
@@ -328,13 +353,46 @@ int main(void)
 
   // Call calibrate once at the beginning of your program to establish a baseline
   calibrate();
+  pid.Kp=Kp;
+  pid.Ki=Ki;
+  pid.Kd=Kd;
+  arm_pid_init_f32(&pid, 1);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	  ReadSensors();
+	  uint32_t current_time = HAL_GetTick();
+	  if((current_time-last_update_time)>=INTERVAL_MS){
+		  last_update_time=HAL_GetTick();
+		  ReadSensors();
+		  position=line_data();
+		  if (position == 255)
+		  {
+			  arm_pid_reset_f32(&pid);
+			  if (last_known_turn_direction == 1) { // We were heading into a right turn
+				  setMotorSpeed(0, turn_speed);
+				  setMotorSpeed(1, -turn_speed);
+			  } else if (last_known_turn_direction == -1) { // We were heading into a left turn
+				  setMotorSpeed(0, -turn_speed);
+				  setMotorSpeed(1, turn_speed);
+			  }
+
+		  } else {
+			  if (position > 0) {
+				  last_known_turn_direction = 1; // Line is to the right
+			  } else if (position < 0) {
+				  last_known_turn_direction = -1; // Line is to the left
+			  }
+			  error = ((float32_t)position - (float32_t)setpoint);
+			  output = arm_pid_f32(&pid, error);
+			  setMotorSpeed(0, base_speed + (int32_t)output);
+			  setMotorSpeed(1, base_speed - (int32_t)output);
+		  }
+	  }
+
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
