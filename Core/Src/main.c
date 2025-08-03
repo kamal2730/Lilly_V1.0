@@ -364,36 +364,35 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-//	  uint32_t current_time = HAL_GetTick();
-//	  if((current_time-last_update_time)>=INTERVAL_MS){
-//		  last_update_time=HAL_GetTick();
-//		  ReadSensors();
-//		  position=line_data();
-//		  if (position == 255)
-//		  {
-//			  arm_pid_reset_f32(&pid);
-//			  if (last_known_turn_direction == 1) { // We were heading into a right turn
-//				  setMotorSpeed(0, turn_speed);
-//				  setMotorSpeed(1, -turn_speed);
-//			  } else if (last_known_turn_direction == -1) { // We were heading into a left turn
-//				  setMotorSpeed(0, -turn_speed);
-//				  setMotorSpeed(1, turn_speed);
-//			  }
-//
-//		  } else {
-//			  if (position > 0) {
-//				  last_known_turn_direction = 1; // Line is to the right
-//			  } else if (position < 0) {
-//				  last_known_turn_direction = -1; // Line is to the left
-//			  }
-//			  error = ((float32_t)position - (float32_t)setpoint);
-//			  output = arm_pid_f32(&pid, error);
-//			  setMotorSpeed(0, base_speed + (int32_t)output);
-//			  setMotorSpeed(1, base_speed - (int32_t)output);
-//		  }
-//	  }
-	  setMotorSpeed(0, base_speed );
-	  setMotorSpeed(1, base_speed );
+	  uint32_t current_time = HAL_GetTick();
+	  if((current_time-last_update_time)>=INTERVAL_MS){
+		  last_update_time=HAL_GetTick();
+		  ReadSensors();
+		  position=line_data();
+		  if (position == 255)
+		  {
+			  arm_pid_reset_f32(&pid);
+			  if (last_known_turn_direction == 1) { // We were heading into a right turn
+				  setMotorSpeed(0, turn_speed);
+				  setMotorSpeed(1, -turn_speed);
+			  } else if (last_known_turn_direction == -1) { // We were heading into a left turn
+				  setMotorSpeed(0, -turn_speed);
+				  setMotorSpeed(1, turn_speed);
+			  }
+
+		  } else {
+			  if (position > 0) {
+				  last_known_turn_direction = 1; // Line is to the right
+			  } else if (position < 0) {
+				  last_known_turn_direction = -1; // Line is to the left
+			  }
+			  error = -((float32_t)position - (float32_t)setpoint);
+			  output = arm_pid_f32(&pid, error);
+			  setMotorSpeed(0, base_speed + (int32_t)output);
+			  setMotorSpeed(1, base_speed - (int32_t)output);
+		  }
+	  }
+
 
 
     /* USER CODE END WHILE */
