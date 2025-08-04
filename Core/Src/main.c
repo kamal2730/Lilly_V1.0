@@ -23,11 +23,26 @@
 /* USER CODE BEGIN Includes */
 #include <stdlib.h>
 #include "arm_math.h"
+#include <string.h>
+#include <math.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+typedef struct __attribute__((packed)) {
+  char        header_start;         // Should be '<'
+  char        header_end;           // Should be '>'
+  float       position;
+  uint16_t    sensor_values[9];     // Your GUI is configured for 9 sensors
+  uint8_t     status_code;
+  float       kp;
+  float       ki;
+  float       kd;
+  uint16_t    threshold;
+  uint8_t     base_speed;
+  float     pid_error;
+  float     pid_output;
+} TelemetryPacket;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -50,6 +65,7 @@ TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
 
 UART_HandleTypeDef huart1;
+DMA_HandleTypeDef hdma_usart1_rx;
 
 /* USER CODE BEGIN PV */
 GPIO_TypeDef* IR_LED_PORTS[9] = { GPIOB, GPIOB, GPIOB, GPIOB, GPIOA, GPIOA, GPIOB, GPIOB, GPIOB};
@@ -82,7 +98,7 @@ volatile uint32_t adc_buf;
 float32_t min_max[9][2];
 
 //PID
-float32_t Kp = 2.5f, Ki = 0.0f, Kd = 0.5f;
+float32_t Kp = 0.1f, Ki = 0.0f, Kd = 0.0f;
 float32_t weights[9]={-40,-30,-20,-10,0,10,20,30,40};
 uint32_t last_update_time = 0;
 const uint32_t INTERVAL_MS = 20;
@@ -96,6 +112,10 @@ uint8_t base_speed = 100;
 uint8_t turn_speed = 60;
 
 arm_pid_instance_f32 pid;
+
+#define RX_BUFFER_SIZE 32
+uint8_t rx_buffer[RX_BUFFER_SIZE];
+volatile uint8_t status_to_send = 0;
 
 /* USER CODE END PV */
 
@@ -115,6 +135,9 @@ void calibrate(void);
 void ReadSensors(void);
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc);
 float32_t line_data(void);
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size);
+void send_telemetry_data(float current_position, float pid_err, float pid_out);
+void handle_received_command(uint8_t* buffer, uint16_t len);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -125,7 +148,7 @@ void setMotorSpeed(uint8_t motor, int32_t speed)
     uint16_t pwm = abs(speed);
     if (pwm > 200) pwm = 200;  // Limit max speed
 
-    if (motor == 1) {  // Right motor
+    if (motor == 0) {  // Left motor
         if (speed < 0) {
             TIM1->CCR3 = pwm;
             TIM1->CCR4 = 0;
@@ -134,7 +157,7 @@ void setMotorSpeed(uint8_t motor, int32_t speed)
             TIM1->CCR4 = pwm;
         }
     }
-    else if (motor == 0) {  // Left motor
+    else if (motor == 1) {  // Right motor
         if (speed < 0) {
             TIM1->CCR2 = pwm;
             TIM1->CCR1 = 0;
@@ -305,6 +328,87 @@ float32_t line_data(void){
 	 return (float32_t)weighted_sum / (float32_t)sum;
 
 }
+void send_telemetry_data(float current_position,float pid_err, float pid_out) {
+    static TelemetryPacket packet;
+
+    packet.header_start = '<';
+    packet.header_end = '>';
+    packet.position = current_position;
+
+    // Fill sensor data from the new code's signal_runtime array
+    for(int i = 0; i < 9; i++) {
+        packet.sensor_values[i] = (uint16_t)signal_runtime[i];
+    }
+
+    packet.status_code = status_to_send;
+    packet.kp = Kp;
+    packet.ki = Ki;
+    packet.kd = Kd;
+    packet.threshold = threshold; // Use the new code's threshold variable
+    packet.base_speed = (uint8_t)base_speed;
+    packet.pid_error = pid_err;
+    packet.pid_output = pid_out;
+
+    HAL_UART_Transmit(&huart1, (uint8_t*)&packet, sizeof(TelemetryPacket), 100);
+
+    status_to_send = 0;
+}
+void handle_received_command(uint8_t* buffer, uint16_t len) {
+    char cmd_string[len + 1];
+    memcpy(cmd_string, buffer, len);
+    cmd_string[len] = '\0';
+
+    char* colon_ptr = strchr(cmd_string, ':');
+
+    if (colon_ptr != NULL) {
+        *colon_ptr = '\0';
+        char* key = cmd_string;
+        char* value_str = colon_ptr + 1;
+        float value = atof(value_str);
+
+        uint8_t pid_constants_changed = 0;
+
+        if (strcmp(key, "KP") == 0) {
+            Kp = value;
+            pid_constants_changed = 1;
+        } else if (strcmp(key, "KI") == 0) {
+            Ki = value;
+            pid_constants_changed = 1;
+        } else if (strcmp(key, "KD") == 0) {
+            Kd = value;
+            pid_constants_changed = 1;
+        } else if (strcmp(key, "TH") == 0) {
+            threshold = value; // Use the new code's threshold variable
+            status_to_send = 1;
+        } else if (strcmp(key, "BS") == 0) {
+            base_speed = (uint8_t)value;
+            status_to_send = 1;
+        } else {
+            status_to_send = 200;
+        }
+
+        if (pid_constants_changed) {
+            // Update the new code's PID instance
+            pid.Kp = Kp;
+            pid.Ki = Ki;
+            pid.Kd = Kd;
+            arm_pid_init_f32(&pid, 1);
+            status_to_send = 1;
+        }
+
+    } else {
+        status_to_send = 200;
+    }
+}
+void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
+{
+    if (huart->Instance == USART1) { // Check for USART1
+        handle_received_command(rx_buffer, Size);
+
+        HAL_UARTEx_ReceiveToIdle_DMA(&huart1, rx_buffer, RX_BUFFER_SIZE); // Check for USART1
+        __HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT); // You may need to change DMA handle name
+    }
+}
 /* USER CODE END 0 */
 
 /**
@@ -345,6 +449,7 @@ int main(void)
   /* USER CODE BEGIN 2 */
   HAL_TIM_Base_Start(&htim2);
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_10, GPIO_PIN_SET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_SET);
 
   // Start PWM for motors
   HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
@@ -358,6 +463,9 @@ int main(void)
   pid.Ki=Ki;
   pid.Kd=Kd;
   arm_pid_init_f32(&pid, 1);
+
+  HAL_UARTEx_ReceiveToIdle_DMA(&huart1, rx_buffer, RX_BUFFER_SIZE);
+  __HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -369,28 +477,34 @@ int main(void)
 		  last_update_time=HAL_GetTick();
 		  ReadSensors();
 		  position=line_data();
-		  if (position == 255)
-		  {
-			  arm_pid_reset_f32(&pid);
-			  if (last_known_turn_direction == 1) { // We were heading into a right turn
-				  setMotorSpeed(0, turn_speed);
-				  setMotorSpeed(1, -turn_speed);
-			  } else if (last_known_turn_direction == -1) { // We were heading into a left turn
-				  setMotorSpeed(0, -turn_speed);
-				  setMotorSpeed(1, turn_speed);
-			  }
+//		  if (position == 255)
+//		  {
+//			  arm_pid_reset_f32(&pid);
+//			  if (last_known_turn_direction == 1) { // We were heading into a right turn
+//				  setMotorSpeed(1, turn_speed);
+//				  setMotorSpeed(0, -turn_speed);
+//			  } else if (last_known_turn_direction == -1) { // We were heading into a left turn
+//				  setMotorSpeed(1, -turn_speed);
+//				  setMotorSpeed(0, turn_speed);
+//			  }
+//
+//		  } else {
+//			  if (position > 0) {
+//				  last_known_turn_direction = 1; // Line is to the right
+//			  } else if (position < 0) {
+//				  last_known_turn_direction = -1; // Line is to the left
+//			  }
+//			  error = -((float32_t)position - (float32_t)setpoint);
+//			  output = arm_pid_f32(&pid, error);
+//			  setMotorSpeed(0, base_speed + (int32_t)output);
+//			  setMotorSpeed(1, base_speed - (int32_t)output);
+//		  }
+		  error = -((float32_t)position - (float32_t)setpoint);
+		  output = arm_pid_f32(&pid, error);
+		  setMotorSpeed(0, base_speed - (int32_t)output);
+		  setMotorSpeed(1, base_speed + (int32_t)output);
+		  send_telemetry_data(position, error, output);
 
-		  } else {
-			  if (position > 0) {
-				  last_known_turn_direction = 1; // Line is to the right
-			  } else if (position < 0) {
-				  last_known_turn_direction = -1; // Line is to the left
-			  }
-			  error = -((float32_t)position - (float32_t)setpoint);
-			  output = arm_pid_f32(&pid, error);
-			  setMotorSpeed(0, base_speed + (int32_t)output);
-			  setMotorSpeed(1, base_speed - (int32_t)output);
-		  }
 	  }
 
 
@@ -728,6 +842,9 @@ static void MX_DMA_Init(void)
   /* DMA2_Stream0_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA2_Stream0_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(DMA2_Stream0_IRQn);
+  /* DMA2_Stream2_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA2_Stream2_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA2_Stream2_IRQn);
 
 }
 
