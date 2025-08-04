@@ -98,18 +98,23 @@ volatile uint32_t adc_buf;
 float32_t min_max[9][2];
 
 //PID
-float32_t Kp = 0.1f, Ki = 0.0f, Kd = 0.0f;
+float32_t Kp = 2.0f, Ki = 0.0f, Kd = 0.005f;
 float32_t weights[9]={-40,-30,-20,-10,0,10,20,30,40};
 uint32_t last_update_time = 0;
 const uint32_t INTERVAL_MS = 20;
-float32_t threshold =120;
+float32_t threshold =300;
 float32_t position;
 float32_t output;
 float32_t error;
 float32_t setpoint=0;
 float32_t last_known_turn_direction;
-uint8_t base_speed = 100;
-uint8_t turn_speed = 60;
+uint8_t base_speed = 50;
+uint8_t turn_speed = 40;
+
+double P, I, D;
+double correction = 0, lastInput = 0;
+uint32_t lastTime = 0;
+double integralMin = -25.0, integralMax = 25.0;
 
 arm_pid_instance_f32 pid;
 
@@ -239,6 +244,28 @@ void calibrate(void)
 
  // print on oled - calibration done
 
+
+}
+
+void computePID(double error, int32_t input) {
+
+//	double timeChange = (double) (HAL_GetTick() - lastTime);
+//	printf("Inside compute pid error = %f\n", error);
+	P = Kp * error;
+	I += Ki * error * 20;
+	if (I > integralMax) I = integralMax;
+	if (I < integralMin) I = integralMin;
+	D = Kd * (input - lastInput) / 20;
+
+	correction = P + I + D;
+	lastInput = input;
+	lastTime = HAL_GetTick();
+	correction = floor(correction);
+//	base_speed_right = floor(base_speed_right);
+//	printf("motor0: %f, motor1:%f\n", base_speed + correction,
+//			base_speed - correction);
+	setMotorSpeed(0, base_speed - correction);
+	setMotorSpeed(1, base_speed + correction);
 
 }
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
@@ -463,6 +490,7 @@ int main(void)
   pid.Ki=Ki;
   pid.Kd=Kd;
   arm_pid_init_f32(&pid, 1);
+  lastTime= HAL_GetTick();
 
   HAL_UARTEx_ReceiveToIdle_DMA(&huart1, rx_buffer, RX_BUFFER_SIZE);
   __HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);
@@ -477,32 +505,49 @@ int main(void)
 		  last_update_time=HAL_GetTick();
 		  ReadSensors();
 		  position=line_data();
+
+		  if (position > 0) {
+			  last_known_turn_direction = 1; // Line is to the right
+		  } else if (position < 0)
+		  {
+			  last_known_turn_direction = -1;
+		  }// Line is to the left
+
+		  if (position ==255)
+		  {
+			  if (last_known_turn_direction == 1) { // We were heading into a right turn
+				  setMotorSpeed(0, turn_speed);
+				  setMotorSpeed(1, -turn_speed);
+			  } else if (last_known_turn_direction == -1) { // We were heading into a left turn
+				  setMotorSpeed(0, -turn_speed);
+				  setMotorSpeed(1, turn_speed);
+			  }
+			  	  continue;
+		  }
 //		  if (position == 255)
 //		  {
-//			  arm_pid_reset_f32(&pid);
+//			  lastTime= HAL_GetTick();
+////			  arm_pid_reset_f32(&pid);
 //			  if (last_known_turn_direction == 1) { // We were heading into a right turn
-//				  setMotorSpeed(1, turn_speed);
-//				  setMotorSpeed(0, -turn_speed);
-//			  } else if (last_known_turn_direction == -1) { // We were heading into a left turn
-//				  setMotorSpeed(1, -turn_speed);
 //				  setMotorSpeed(0, turn_speed);
+//				  setMotorSpeed(1, -turn_speed);
+//			  } else if (last_known_turn_direction == -1) { // We were heading into a left turn
+//				  setMotorSpeed(0, -turn_speed);
+//				  setMotorSpeed(1, turn_speed);
 //			  }
+//			  continue;
 //
-//		  } else {
-//			  if (position > 0) {
-//				  last_known_turn_direction = 1; // Line is to the right
-//			  } else if (position < 0) {
-//				  last_known_turn_direction = -1; // Line is to the left
-//			  }
-//			  error = -((float32_t)position - (float32_t)setpoint);
-//			  output = arm_pid_f32(&pid, error);
-//			  setMotorSpeed(0, base_speed + (int32_t)output);
-//			  setMotorSpeed(1, base_speed - (int32_t)output);
 //		  }
-		  error = -((float32_t)position - (float32_t)setpoint);
-		  output = arm_pid_f32(&pid, error);
-		  setMotorSpeed(0, base_speed - (int32_t)output);
-		  setMotorSpeed(1, base_speed + (int32_t)output);
+//		  else {
+//}
+////			  setMotorSpeed(0, base_speed + (int32_t)output);
+////			  setMotorSpeed(1, base_speed - (int32_t)output);
+//		  }
+
+
+
+		  error = -((float32_t)position);
+		  computePID(error,position);
 		  send_telemetry_data(position, error, output);
 
 	  }
