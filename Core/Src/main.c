@@ -102,13 +102,14 @@ float32_t Kp = 2.0f, Ki = 0.0f, Kd = 0.005f;
 float32_t weights[9]={-40,-30,-20,-10,0,10,20,30,40};
 uint32_t last_update_time = 0;
 const uint32_t INTERVAL_MS = 20;
-float32_t threshold =300;
+float32_t threshold [9]={200,200,200,150,200,200,200,200,200};
+float32_t lower_threshold[9]={70,70,70,40,30,70,70,70,70};
 float32_t position;
 float32_t output;
 float32_t error;
 float32_t setpoint=0;
 float32_t last_known_turn_direction;
-uint8_t base_speed = 50;
+uint8_t base_speed = 70;
 uint8_t turn_speed = 40;
 
 double P, I, D;
@@ -342,7 +343,7 @@ float32_t line_data(void){
 	float32_t weighted_sum = 0;
 	float32_t onLine = 0;
 	for(int i=0;i<9;i++){
-		if(signal_runtime[i]<threshold){
+		if(signal_runtime[i]<threshold[i] && signal_runtime[i]>lower_threshold[i]){
 			weighted_sum += weights[i];
 			sum += 1;
             onLine = 1;
@@ -371,7 +372,7 @@ void send_telemetry_data(float current_position,float pid_err, float pid_out) {
     packet.kp = Kp;
     packet.ki = Ki;
     packet.kd = Kd;
-    packet.threshold = threshold; // Use the new code's threshold variable
+//    packet.threshold = threshold; // Use the new code's threshold variable
     packet.base_speed = (uint8_t)base_speed;
     packet.pid_error = pid_err;
     packet.pid_output = pid_out;
@@ -404,10 +405,12 @@ void handle_received_command(uint8_t* buffer, uint16_t len) {
         } else if (strcmp(key, "KD") == 0) {
             Kd = value;
             pid_constants_changed = 1;
-        } else if (strcmp(key, "TH") == 0) {
-            threshold = value; // Use the new code's threshold variable
-            status_to_send = 1;
-        } else if (strcmp(key, "BS") == 0) {
+        }
+//        else if (strcmp(key, "TH") == 0) {
+//            threshold = value; // Use the new code's threshold variable
+//            status_to_send = 1;
+//        }
+        else if (strcmp(key, "BS") == 0) {
             base_speed = (uint8_t)value;
             status_to_send = 1;
         } else {
@@ -506,9 +509,10 @@ int main(void)
 		  ReadSensors();
 		  position=line_data();
 
-		  if (position > 0) {
+		  if (position > 20) {
 			  last_known_turn_direction = 1; // Line is to the right
-		  } else if (position < 0)
+		  }
+		  else if (position<-20)
 		  {
 			  last_known_turn_direction = -1;
 		  }// Line is to the left
