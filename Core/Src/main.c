@@ -43,6 +43,12 @@ typedef struct __attribute__((packed)) {
   float     pid_error;
   float     pid_output;
 } TelemetryPacket;
+typedef struct __attribute__((packed)) {
+  char header_start;         // Should be '<'
+  char header_end;           // Should be '>'
+  float position;
+  uint8_t sensor_bools[9];    // 1 or 0 for each sensor
+} SimplifiedTelemetryPacket;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -86,7 +92,7 @@ uint32_t sensorAdcChannel[9] = {
 float32_t ambient_adc[9][1000];
 float32_t ir_on_adc[9][1000];
 float32_t signal_calib[9][1000];
-float32_t signal_runtime[9];
+volatile float32_t signal_runtime[9];
 float32_t localMin=0;
 float32_t localMax=0;
 
@@ -101,16 +107,17 @@ float32_t min_max[9][2];
 float32_t Kp = 2.0f, Ki = 0.0f, Kd = 0.005f;
 float32_t weights[9]={-40,-30,-20,-10,0,10,20,30,40};
 uint32_t last_update_time = 0;
-const uint32_t INTERVAL_MS = 20;
-float32_t threshold [9]={200,200,200,150,200,200,200,200,200};
+const uint32_t INTERVAL_MS = 0;
+const float32_t threshold[9]={250,250,250,100,150,250,250,250,150};
 float32_t lower_threshold[9]={70,70,70,40,30,70,70,70,70};
 float32_t position;
 float32_t output;
 float32_t error;
 float32_t setpoint=0;
 float32_t last_known_turn_direction;
-uint8_t base_speed = 70;
-uint8_t turn_speed = 40;
+uint8_t base_speed = 60;
+uint8_t turn_speed = 50;
+int turn=1;
 
 double P, I, D;
 double correction = 0, lastInput = 0;
@@ -343,7 +350,7 @@ float32_t line_data(void){
 	float32_t weighted_sum = 0;
 	float32_t onLine = 0;
 	for(int i=0;i<9;i++){
-		if(signal_runtime[i]<threshold[i] && signal_runtime[i]>lower_threshold[i]){
+		if(signal_runtime[i]< threshold[i]){
 			weighted_sum += weights[i];
 			sum += 1;
             onLine = 1;
@@ -364,7 +371,7 @@ void send_telemetry_data(float current_position,float pid_err, float pid_out) {
     packet.position = current_position;
 
     // Fill sensor data from the new code's signal_runtime array
-    for(int i = 0; i < 9; i++) {
+    for(int i = 0; i < 8; i++) {
         packet.sensor_values[i] = (uint16_t)signal_runtime[i];
     }
 
@@ -439,6 +446,24 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
         __HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT); // You may need to change DMA handle name
     }
 }
+void send_telemetry_data_new(float current_position) {
+    static SimplifiedTelemetryPacket packet;
+
+    packet.header_start = '<';
+    packet.header_end = '>';
+    packet.position = current_position;
+
+    // Populate the boolean sensor array
+    for(int i = 0; i < 9; i++) {
+        if (signal_runtime[i] < threshold[i]) {
+            packet.sensor_bools[i] = 1;
+        } else {
+            packet.sensor_bools[i] = 0;
+        }
+    }
+
+    HAL_UART_Transmit(&huart1, (uint8_t*)&packet, sizeof(SimplifiedTelemetryPacket), 100);
+}
 /* USER CODE END 0 */
 
 /**
@@ -508,21 +533,19 @@ int main(void)
 		  last_update_time=HAL_GetTick();
 		  ReadSensors();
 		  position=line_data();
-
-		  if (position > 20) {
-			  last_known_turn_direction = 1; // Line is to the right
+		  if(position>20 && position!=255){
+			 turn=1;
+		  }else if(position<-20){
+			  turn=-1;
 		  }
-		  else if (position<-20)
-		  {
-			  last_known_turn_direction = -1;
-		  }// Line is to the left
+
 
 		  if (position ==255)
 		  {
-			  if (last_known_turn_direction == 1) { // We were heading into a right turn
+			  if (turn == 1) { // We were heading into a right turn
 				  setMotorSpeed(0, turn_speed);
 				  setMotorSpeed(1, -turn_speed);
-			  } else if (last_known_turn_direction == -1) { // We were heading into a left turn
+			  } else if (turn == -1) { // We were heading into a left turn
 				  setMotorSpeed(0, -turn_speed);
 				  setMotorSpeed(1, turn_speed);
 			  }
@@ -552,7 +575,7 @@ int main(void)
 
 		  error = -((float32_t)position);
 		  computePID(error,position);
-		  send_telemetry_data(position, error, output);
+		  send_telemetry_data_new(position);
 
 	  }
 
